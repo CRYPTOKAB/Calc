@@ -1,56 +1,76 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Advanced Calculator</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-</head>
-<body>
-    <div class="app">
-        <div class="calc">
-            <div class="display">
-                <input type="text" id="expr" value="" placeholder="Enter expression...">
-                <div class="result" id="result">= 0</div>
-            </div>
-            
-            <div class="keys">
-                <button class="danger" data-action="clear">AC</button>
-                <button class="danger" data-action="del">DEL</button>
-                <button class="op" data-insert="(">(</button>
-                <button class="op" data-insert=")">)</button>
-                
-                <button class="op" data-func="sin(">sin</button>
-                <button data-insert="7">7</button>
-                <button data-insert="8">8</button>
-                <button data-insert="9">9</button>
-                <button class="op" data-insert="/">÷</button>
+# app.py
 
-                <button class="op" data-func="cos(">cos</button>
-                <button data-insert="4">4</button>
-                <button data-insert="5">5</button>
-                <button data-insert="6">6</button>
-                <button class="op" data-insert="*">×</button>
-                
-                <button class="op" data-func="tan(">tan</button>
-                <button data-insert="1">1</button>
-                <button data-insert="2">2</button>
-                <button data-insert="3">3</button>
-                <button class="op" data-insert="-">−</button>
+from flask import Flask, request, jsonify, render_template
+import math
+import sys
 
-                <button class="op" data-insert="pi">π</button>
-                <button class="wide" data-insert="0">0</button>
-                <button data-insert=".">.</button>
-                <button class="op" data-insert="+">+</button>
-                
-                <button class="equals" id="equals">=</button>
-            </div>
-        </div>
-        <div class="foot">
-            Scientific Calculator using Flask & Vanilla JS
-        </div>
-    </div>
+# Define a safe environment for the eval() function
+# Only allows specified functions and constants, preventing system commands.
+SAFE_GLOBALS = {
+    '__builtins__': None,  # Disable built-in functions
+    'sin': math.sin,
+    'cos': math.cos,
+    'tan': math.tan,
+    'sqrt': math.sqrt,
+    'log': math.log,
+    'pi': math.pi,
+    'e': math.e,
+    'abs': abs,
+    'int': int,
+    'float': float,
+    'pow': pow,
+    'round': round,
+}
 
-    <script src="{{ url_for('static', filename='main.js') }}"></script>
-</body>
-</html>
+app = Flask(__name__, static_folder='static', template_folder='templates') # Define static folder
+
+@app.route('/')
+def serve_index():
+    """Serves the main HTML page."""
+    # Note: Flask looks for index.html in a 'templates' folder by default.
+    return render_template('index.html')
+
+@app.route('/api/calc', methods=['POST'])
+def calculate_api():
+    """Handles POST requests to /api/calc for evaluation."""
+    try:
+        data = request.get_json()
+        if not data or 'expr' not in data:
+            return jsonify({"ok": False, "error": "No expression provided"}), 400
+
+        expr = str(data['expr']).strip()
+        if not expr:
+            return jsonify({"ok": True, "result": "0"})
+
+        # Basic security check: prevent dangerous keywords
+        if any(keyword in expr for keyword in ['import', 'os.', 'sys.', 'exec', 'open', '__']):
+            return jsonify({"ok": False, "error": "Forbidden keyword detected"}), 403
+
+        # Compile the expression safely
+        code = compile(expr, '<string>', 'eval')
+        
+        # Check for function names used in the code object that are not in our SAFE_GLOBALS
+        for name in code.co_names:
+            if name not in SAFE_GLOBALS:
+                return jsonify({"ok": False, "error": f"Function or constant '{name}' not allowed"}), 403
+
+        # Evaluate the expression in the restricted environment
+        result = eval(code, {"__builtins__": None}, SAFE_GLOBALS)
+        
+        # Format the result (removes trailing zeros, handles large numbers gracefully)
+        formatted_result = f'{result:g}' 
+
+        return jsonify({"ok": True, "result": formatted_result})
+
+    except ZeroDivisionError:
+        return jsonify({"ok": False, "error": "Division by zero"}), 400
+    except (SyntaxError, NameError, TypeError) as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:
+        print(f"Server Error: {e}", file=sys.stderr)
+        return jsonify({"ok": False, "error": "Internal server error"}), 500
+
+if __name__ == '__main__':
+    # Run the application. Access at http://127.0.0.1:5000/
+    print("Starting Flask server on http://127.0.0.1:5000/")
+    app.run(debug=True)
