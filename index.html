@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport"content="width=device-width,initial-scale=1"/>
+        <title>Calculator By Kab10</title>
+        <link rel="stylesheet"href="{{url_for('static',filename='styles.css')}}">
+    </head>
+
+<body>
+    <div class="app">
+        <div class="calc">
+            <div class="display">
+                <input id="expr" type="text" placeholder="0" autocomplete="off"/>
+                <div id="result"class="result">=</div>
+            </div>
+
+            <div class="keys">
+                <!--Row 1-->
+                <button data-action="clear" class="danger">AC</button>
+                <button data-action="del">DEL</button>
+                <button data-insert="(">(</button>
+                <button data-insert=")">)</button>
+
+                <!--Row 2-->
+                <button data-func="sqrt(">sqrt</button>
+                <button data-func="sin(">sin</button>
+                <button data-func="cos(">cos</button>
+                <button data-func="tan(">tan</button>
+
+                <!--Row 3-->
+                <button data-insert="7">7</button>
+                <button data-insert="8">8</button>
+                <button data-insert="9">9</button>
+                <button data-insert="/"class="op">/</button>
+
+                <!--Row 4-->
+                <button data-insert="4">4</button>
+                <button data-insert="5">5</button>
+                <button data-insert="6">6</button>
+                <button data-insert="x"class="op">x</button>
+
+                <!--Row 5-->
+                <button data-insert="1">1</button>
+                <button data-insert="2">2</button>
+                <button data-insert="3">3</button>
+                <button data-insert="-"class="op">-</button>
+
+                <!--Row 6-->
+                <button data-insert="0">0</button>
+                <button data-insert=".">.</button>
+                <button data-insert="%">%</button>
+                <button data-insert="+">+</button>
+
+                <!--Row 7-->
+                <button data-insert="**"class="wide">X`</button>
+                <button data-func="exp("class="wide">exp</button>
+
+                <!--Row 8-->
+                <button data-insert="pi"class="wide">pi</button>
+                <button data-insert="e"class="wide">e</button>
+
+                <!--Row 9-->
+                
+                <button id="equals">=</button>
+
+            </div>
+            <div class="foot">Functions:sqrt(x),sin(x),cos(x),tan(x),log(x)•Constants:pi,e</div>
+        </div>
+    </div>
+
+    <script src="{{url_for('static',filename='main.js')}}"></script>
+
+</body>
+</html>
