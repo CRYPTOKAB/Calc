@@ -1,105 +1,94 @@
-from __future__ import annotations
+# app.py
 
-from flask import Flask, render_template, request, jsonify
-import ast
-import operator
+from flask import Flask, request, jsonify, render_template, send_from_directory
 import math
+import sys
 
-
-app = Flask(__name__)
-
-bin_ops ={
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.FloorDiv:operator.floordiv,
-    ast.mod: operator.mod,
-    ast.Pow: operator.pow,
+# Add constants and functions from the standard math library
+# This dictionary will be used to safely evaluate the expression
+SAFE_GLOBALS = {
+    '__builtins__': None,  # Disable built-in functions
+    'sin': math.sin,
+    'cos': math.cos,
+    'tan': math.tan,
+    'sqrt': math.sqrt,
+    'log': math.log,
+    'pi': math.pi,
+    'e': math.e,
 }
-UNARY_ops = {
+# Add basic operators and number types
+SAFE_GLOBALS.update({
+    '__import__': None,
+    'abs': abs,
+    'int': int,
+    'float': float,
+    'pow': pow,
+    'round': round,
+})
 
-ast.UAdd: operator.pos,
-ast.USub: operator.neg,
+app = Flask(__name__, static_folder='static')
 
-}
-
-ALLOWED_NAMES = {
-    "PI": math.pi,
-    "e": math.e
-}
-
-ALLOWED_FUNCS = {
-
-    "sqrt": math.sqrt,
-    "sin": math.sin,
-    "cos": math.cos,
-    "tan": math.tan,
-    "log": math.log,
-    "exp":math.exp,
-    "abs": abs,
-    "round": round,
-}
-
-class SafeEvalError(Exception):
-    pass
-
-def _eval(node):
-    if isinstance(node, ast.BinOp) and type(node.op) in bin_ops:
-        left = _eval(node.left)
-        right = _eval(node.right)
-        op_func = bin_ops[type(node.op)]
-        if type(node.op) is ast.Div and right == 0:
-            raise SafeEvalError("Division by zero is not allowed.")
-        return op_func(left, right)
-
-    if isinstance(node, ast.UnaryOp) and type(node.op) in UNARY_ops:
-        return UNARY_ops[type(node.op)](_eval(node.operand))
-
-    if isinstance(node, ast.Name):
-        if node.id in ALLOWED_NAMES:
-            return ALLOWED_NAMES[node.id]
-        raise SafeEvalError(f"Unknown name: {node.id}")
-
-    if isinstance(node, ast.Call):
-        if isinstance(node.func, ast.Name) and node.func.id in ALLOWED_FUNCS:
-            func = ALLOWED_FUNCS[node.func.id]
-            if node.keywords:
-                raise SafeEvalError("Keyword arguments are not allowed.")
-            args = [_eval(arg) for arg in node.args]
-            return func(*args)
-        raise SafeEvalError(f"Funtion not allowed")
-
-    raise SafeEvalError(f"Unsupported expression")
-
-def safe_eval(expr: str) -> float | int:
-    try:
-        expr = (expr or "").replace("x", "*").replace("÷", "/")
-        tree = ast.parse(expr, mode="eval")
-        result = _eval(tree.body)
-        if isinstance(result, float) and result.is_integer():
-            return int(result)
-        return result
-    except ZeroDivisionError as zde:
-        raise SafeEvalError("Division by zero is not allowed.") from zde
-    except Exception as e:
-        raise SafeEvalError(str(e)) from e
-    
 @app.route('/')
-def index():
+def serve_index():
+    """Serves the main HTML page."""
+    # Flask looks for templates in a 'templates' folder by default, 
+    # but we'll use a direct file path for simplicity if we had a dedicated templates folder.
+    # For this structure, we'll assume index.html is served from the root.
     return render_template('index.html')
 
-@app.route('/calculate', methods=['POST'])
-def api_calc():
-    data = request.get_json(silent=True) or {}
-    expression = data.get('expr', '')
+@app.route('/api/calc', methods=['POST'])
+def calculate_api():
+    """
+    Handles POST requests to /api/calc.
+    It takes an expression, safely evaluates it, and returns the result.
+    """
     try:
-        result = safe_eval(expression)
-        return jsonify({'result': result})
-    except SafeEvalError as zde:
-        return jsonify({"ok": False, 'error': str(zde)}), 400
-    except SafeEvalError as e:
-        return jsonify({'error': str(e)}), 400
-    
+        # 1. Get the expression from the JSON body
+        data = request.get_json()
+        if not data or 'expr' not in data:
+            return jsonify({"ok": False, "error": "No expression provided"}), 400
+
+        expr = str(data['expr']).strip()
+        if not expr:
+            return jsonify({"ok": True, "result": "0"}) # Return 0 for empty input
+
+        # 2. **Safety Check** (Crucial for evaluation)
+        # We must prevent dangerous commands like 'os.system("rm -rf /")'
+        # Check for dangerous characters/keywords
+        if any(keyword in expr for keyword in ['import', 'os.', 'sys.', 'exec', 'eval(']):
+            return jsonify({"ok": False, "error": "Forbidden operation"}), 403
+
+        # 3. **Evaluation**
+        # The 'eval()' function is dangerous. We use 'compile' and a restricted
+        # environment to make it safer, primarily limiting the accessible functions.
+        code = compile(expr, '<string>', 'eval')
+        
+        # Check if the expression contains builtins that were filtered out
+        if code.co_names:
+            for name in code.co_names:
+                if name not in SAFE_GLOBALS:
+                    return jsonify({"ok": False, "error": f"Function '{name}' not allowed"}), 403
+
+        # Use the restricted global environment
+        result = eval(code, SAFE_GLOBALS)
+        
+        # 4. Format and Return
+        # Format the result to 8 decimal places max, avoiding trailing zeros
+        formatted_result = f'{result:g}' 
+
+        return jsonify({"ok": True, "result": formatted_result})
+
+    except ZeroDivisionError:
+        return jsonify({"ok": False, "error": "Division by zero"}), 400
+    except (SyntaxError, NameError, TypeError) as e:
+        # Catch errors like '1++' or 'invalidfunc()'
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:
+        # Catch unexpected server errors
+        print(f"Server Error: {e}", file=sys.stderr)
+        return jsonify({"ok": False, "error": "Server calculation error"}), 500
+
 if __name__ == '__main__':
+    # You'll access the calculator at http://127.0.0.1:5000/
+    print("Starting Flask server on http://127.0.0.1:5000/")
     app.run(debug=True)
