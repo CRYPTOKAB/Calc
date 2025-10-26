@@ -1,141 +1,76 @@
-// static/main.js
+# app.py
 
-const $expr = document.getElementById("expr"); 
-const $result = document.getElementById("result"); 
-const $equals = document.getElementById("equals"); 
-const API = "/api/calc"; 
+from flask import Flask, request, jsonify, render_template
+import math
+import sys
 
-function insertText(txt) { 
-    const start = $expr.selectionStart; 
-    const end = $expr.selectionEnd; 
-    const before = $expr.value.slice(0, start); 
-    const after  = $expr.value.slice(end); 
-    
-    // Check if the character before the insertion point is a number or a constant (like 'pi')
-    // If so, and we're inserting a function, add a '*' for implicit multiplication.
-    // This is optional but improves calculator usability.
-    const lastChar = start > 0 ? $expr.value.slice(start - 1, start) : '';
-    if (txt.endsWith("(") && lastChar.match(/[\d\.a-zA-Z\)]/)) {
-        txt = "*" + txt;
-    }
+# Define a safe environment for the eval() function
+# Only allows specified functions and constants, preventing system commands.
+SAFE_GLOBALS = {
+    '__builtins__': None,  # Disable built-in functions
+    'sin': math.sin,
+    'cos': math.cos,
+    'tan': math.tan,
+    'sqrt': math.sqrt,
+    'log': math.log,
+    'pi': math.pi,
+    'e': math.e,
+    'abs': abs,
+    'int': int,
+    'float': float,
+    'pow': pow,
+    'round': round,
+}
 
-    $expr.value = before + txt + after; 
-    const caret = start + txt.length; 
-    $expr.focus(); 
-    $expr.setSelectionRange(caret, caret); 
-} 
+app = Flask(__name__, static_folder='static', template_folder='templates') # Define static folder
 
-function wrapIfFunc(token) { 
-    // This function handles the "data-func" buttons (like sin, cos)
-    // The token from the button should already include the '(', e.g., "sin("
-    return token; // No change needed here if buttons provide "sin("
-} 
+@app.route('/')
+def serve_index():
+    """Serves the main HTML page."""
+    # Note: Flask looks for index.html in a 'templates' folder by default.
+    return render_template('index.html')
 
-function delChar() { 
-    const start = $expr.selectionStart; 
-    const end = $expr.selectionEnd; 
+@app.route('/api/calc', methods=['POST'])
+def calculate_api():
+    """Handles POST requests to /api/calc for evaluation."""
+    try:
+        data = request.get_json()
+        if not data or 'expr' not in data:
+            return jsonify({"ok": False, "error": "No expression provided"}), 400
 
-    // If text is selected, delete the selection
-    if (start !== end) { 
-        const before = $expr.value.slice(0, start); 
-        const after  = $expr.value.slice(end); 
-        $expr.value = before + after; 
-        $expr.setSelectionRange(start, start); 
-        $expr.focus();
-        return; 
-    } 
+        expr = str(data['expr']).strip()
+        if not expr:
+            return jsonify({"ok": True, "result": "0"})
 
-    // If nothing is selected, delete one character before the caret
-    if (start > 0) { 
-        const before = $expr.value.slice(0, start - 1); 
-        const after  = $expr.value.slice(start); 
-        $expr.value = before + after; 
-        $expr.setSelectionRange(start - 1, start - 1); 
-    } 
-    $expr.focus(); 
-} 
+        # Basic security check: prevent dangerous keywords
+        if any(keyword in expr for keyword in ['import', 'os.', 'sys.', 'exec', 'open', '__']):
+            return jsonify({"ok": False, "error": "Forbidden keyword detected"}), 403
 
-async function calculate() { 
-    const expr = $expr.value.trim(); 
-    if (!expr) { $result.textContent = "= 0"; return; } 
-
-    try { 
-        const res = await fetch(API, { 
-            method: "POST", 
-            headers: {"Content-Type": "application/json"}, 
-            body: JSON.stringify({ expr }) 
-        }); 
-
-        // Check for non-200 status codes (e.g., 400, 500)
-        if (!res.ok) {
-            // Read the JSON error response from the server if available
-            try {
-                const data = await res.json();
-                $result.textContent = "Error: " + (data.error || "Server responded with an error");
-            } catch (e) {
-                // Handle cases where the server sends a non-JSON error
-                $result.textContent = "HTTP Error: " + res.status;
-            }
-            return;
-        }
-
-        const data = await res.json(); 
+        # Compile the expression safely
+        code = compile(expr, '<string>', 'eval')
         
-        if (data.ok) { 
-            $result.textContent = "= " + data.result; 
-        } else { 
-            // Handle errors returned *within* the 200 OK response (as defined in app.py)
-            $result.textContent = "Error: " + (data.error || "Invalid expression"); 
-        } 
+        # Check for function names used in the code object that are not in our SAFE_GLOBALS
+        for name in code.co_names:
+            if name not in SAFE_GLOBALS:
+                return jsonify({"ok": False, "error": f"Function or constant '{name}' not allowed"}), 403
 
-    } catch (e) { 
-        // This is the "Network error" block: connection issues, server not running, etc.
-        console.error("Fetch failed:", e);
-        $result.textContent = "Network error (Is the Python server running?)"; 
-    } 
-} 
+        # Evaluate the expression in the restricted environment
+        result = eval(code, {"__builtins__": None}, SAFE_GLOBALS)
+        
+        # Format the result (removes trailing zeros, handles large numbers gracefully)
+        formatted_result = f'{result:g}' 
 
-// --- Event Listeners ---
+        return jsonify({"ok": True, "result": formatted_result})
 
-// Numbers and Operators (data-insert)
-document.querySelectorAll("button[data-insert]").forEach(btn => { 
-    btn.addEventListener("click", () => insertText(btn.getAttribute("data-insert"))); 
-}); 
+    except ZeroDivisionError:
+        return jsonify({"ok": False, "error": "Division by zero"}), 400
+    except (SyntaxError, NameError, TypeError) as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:
+        print(f"Server Error: {e}", file=sys.stderr)
+        return jsonify({"ok": False, "error": "Internal server error"}), 500
 
-// Functions (data-func)
-document.querySelectorAll("button[data-func]").forEach(btn => { 
-    btn.addEventListener("click", () => insertText(wrapIfFunc(btn.getAttribute("data-func")))); 
-}); 
-
-// Action: Clear
-document.querySelector("button[data-action='clear']").addEventListener("click", () => { 
-    $expr.value = ""; 
-    $result.textContent = "= 0"; 
-    $expr.focus(); 
-}); 
-
-// Action: Delete
-document.querySelector("button[data-action='del']").addEventListener("click", delChar); 
-
-// Action: Equals
-$equals.addEventListener("click", calculate); 
-
-// Keyboard: Enter = calculate
-$expr.addEventListener("keydown", (e) => { 
-    if (e.key === "Enter") { 
-        e.preventDefault(); 
-        calculate(); 
-    } 
-}); 
-
-// Live preview (debounced)
-$expr.addEventListener("input", () => { 
-    clearTimeout($expr._t); 
-    $expr._t = setTimeout(calculate, 250); 
-}); 
-
-// Initial focus 
-$expr.focus();
-
-// Add a slight delay to ensure it focuses after the page fully loads
-setTimeout(() => $expr.focus(), 50);
+if __name__ == '__main__':
+    # Run the application. Access at http://127.0.0.1:5000/
+    print("Starting Flask server on http://127.0.0.1:5000/")
+    app.run(debug=True)
